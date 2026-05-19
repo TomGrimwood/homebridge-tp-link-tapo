@@ -82,8 +82,23 @@ export default class TPLink {
       }
 
       this.classSetup = true;
-    } catch (e) {
-      this.log.error('Error setting up TPLink class:', e);
+    } catch (e: any) {
+      const code: string | undefined = e?.code ?? e?.cause?.code;
+      if (code && code !== 'ERR_BAD_REQUEST') {
+        this.log.debug(
+          'Error setting up TPLink class for %s (%s): %s',
+          this.ip,
+          code,
+          e?.message ?? String(e)
+        );
+      } else {
+        this.log.error(
+          'Error setting up TPLink class for %s: %s',
+          this.ip,
+          e?.message ?? String(e)
+        );
+        this.log.debug('Full setup error for %s:', this.ip, e);
+      }
     }
 
     return this;
@@ -271,7 +286,36 @@ export default class TPLink {
       this.tryResendCommand = false;
       return (body?.result ?? body?.error_code === 0) as CommandReturnType<T>;
     } catch (e: any) {
-      this.log.error('Error sending command:', command, e);
+      const networkErrorCodes = new Set([
+        'EHOSTUNREACH',
+        'ECONNREFUSED',
+        'ECONNRESET',
+        'ECONNABORTED',
+        'ETIMEDOUT',
+        'ENETUNREACH',
+        'ENOTFOUND'
+      ]);
+      const code: string | undefined = e?.code ?? e?.cause?.code;
+
+      if (code && networkErrorCodes.has(code)) {
+        // Device is unreachable (offline, powered off, etc). Avoid
+        // dumping the full axios error object on every failed poll.
+        this.log.debug(
+          'Device unreachable while sending %s to %s (%s).',
+          command,
+          this.ip,
+          code
+        );
+      } else {
+        this.log.error(
+          'Error sending command %s to %s: %s',
+          command,
+          this.ip,
+          e?.message ?? String(e)
+        );
+        this.log.debug('Full error details for %s:', this.ip, e);
+      }
+
       this.tryResendCommand = false;
       return null as CommandReturnType<T>;
     }

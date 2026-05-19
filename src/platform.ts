@@ -24,7 +24,15 @@ import ContactAccessory from './accessories/Contact';
 import MotionSensorAccessory from './accessories/MotionSensor';
 
 export default class Platform implements DynamicPlatformPlugin {
-  private readonly TIMEOUT_TRIES = 20;
+  // Initial connect attempts at startup. Kept low so Homebridge boots
+  // quickly even when some devices are offline; background reconnects
+  // continue indefinitely (see RECONNECT_INTERVAL_MS).
+  private readonly TIMEOUT_TRIES = 3;
+
+  // How often to retry offline devices in the background. Long enough
+  // to be gentle on a powered-off router, short enough that a device
+  // coming back online appears in HomeKit within a couple minutes.
+  private readonly RECONNECT_INTERVAL_MS = 60 * 1000;
 
   public readonly Service: typeof Service = this.api.hap.Service;
   public readonly Characteristic: typeof Characteristic =
@@ -37,6 +45,10 @@ export default class Platform implements DynamicPlatformPlugin {
   private readonly deviceRetry: {
     [key: string]: number;
   } = {};
+  // Tracks IPs that finished their startup retries without succeeding.
+  // The background reconnect loop will keep trying these forever.
+  private readonly offlineAddresses = new Set<string>();
+  private reconnectTimer?: NodeJS.Timeout;
 
   constructor(
     public readonly log: Logger,
@@ -47,8 +59,85 @@ export default class Platform implements DynamicPlatformPlugin {
 
     this.api.on('didFinishLaunching', () => {
       log.debug('Executed didFinishLaunching callback');
-      this.discoverDevices();
+      this.discoverDevices().then(() => this.startReconnectLoop());
     });
+
+    this.api.on('shutdown', () => {
+      if (this.reconnectTimer) {
+        clearInterval(this.reconnectTimer);
+        this.reconnectTimer = undefined;
+      }
+    });
+  }
+
+  private startReconnectLoop() {
+    if (this.reconnectTimer) {
+      return;
+    }
+    this.reconnectTimer = setInterval(() => {
+      void this.reconnectOfflineDevices();
+    }, this.RECONNECT_INTERVAL_MS);
+    // Don't keep the process alive solely for this timer.
+    this.reconnectTimer.unref?.();
+  }
+
+  private async reconnectOfflineDevices() {
+    const { email, password } = this.config ?? {};
+    if (!email || !password || this.offlineAddresses.size === 0) {
+      return;
+    }
+
+    const addresses = [...this.offlineAddresses];
+    this.log.debug(
+      'Background reconnect: trying %d offline device(s)',
+      addresses.length
+    );
+
+    for (const ip of addresses) {
+      // Reset the per-device retry counter so loadDevice gets a fresh
+      // budget of TIMEOUT_TRIES attempts for this reconnect pass.
+      const uuid = this.api.hap.uuid.generate(ip);
+      delete this.deviceRetry[uuid];
+      try {
+        await this.loadDevice(ip, email, password);
+      } catch (err: any) {
+        this.log.debug(
+          'Background reconnect attempt failed for %s: %s',
+          ip,
+          err?.message ?? String(err)
+        );
+      }
+    }
+
+    // Re-scan hubs in case a hub came back online and brought children
+    // with it.
+    if (this.hubs.length > 0) {
+      try {
+        await Promise.all(
+          this.hubs.map(async (hub) => {
+            const devices = await hub.getChildDevices();
+            await Promise.all(
+              devices.map((device) => {
+                if (Object.keys(device || {}).length === 0) {
+                  return Promise.resolve();
+                }
+                const childUuid = this.api.hap.uuid.generate(device.device_id);
+                if (this.loadedChildUUIDs[childUuid]) {
+                  return Promise.resolve();
+                }
+                this.loadedChildUUIDs[childUuid] = true;
+                return this.loadChildDevice(device.device_id, device, hub);
+              })
+            );
+          })
+        );
+      } catch (err: any) {
+        this.log.debug(
+          'Background reconnect hub child sweep failed: %s',
+          err?.message ?? String(err)
+        );
+      }
+    }
   }
 
   configureAccessory(accessory: PlatformAccessory<Context>) {
@@ -110,27 +199,35 @@ export default class Platform implements DynamicPlatformPlugin {
     if (this.deviceRetry[uuid] === undefined) {
       this.deviceRetry[uuid] = this.TIMEOUT_TRIES;
     } else if (this.deviceRetry[uuid] <= 0) {
-      this.log.info('Retry timeout:', ip);
+      // Out of startup-retry budget. Defer to the background reconnect
+      // loop, which will keep retrying every RECONNECT_INTERVAL_MS.
+      this.offlineAddresses.add(ip);
+      this.log.info(
+        '%s is offline; will keep trying in the background every %ds.',
+        ip,
+        Math.round(this.RECONNECT_INTERVAL_MS / 1000)
+      );
       return;
     } else {
-      this.log.info('Retry to connect in 10s', ':', ip);
-      await delay(10 * 1000);
-      this.log.info(
-        'Try for',
+      this.log.debug(
+        'Retrying %s in 10s (%d/%d)',
         ip,
-        ':',
-        `${this.deviceRetry[uuid]}/${this.TIMEOUT_TRIES}`
+        this.deviceRetry[uuid],
+        this.TIMEOUT_TRIES
       );
+      await delay(10 * 1000);
     }
 
     try {
       const tpLink = await new TPLink(ip, email, password, this.log).setup();
       const deviceInfo = await tpLink.getInfo();
       if (Object.keys(deviceInfo || {}).length === 0) {
-        this.log.error('Failed to get info about:', ip);
+        this.log.debug('No info from %s yet (will retry).', ip);
         this.deviceRetry[uuid] -= 1;
         return await this.loadDevice(ip, email, password);
       }
+      // Success — remove from offline list if it was there.
+      this.offlineAddresses.delete(ip);
 
       const deviceName = Buffer.from(
         deviceInfo?.nickname || 'Tm8gTmFtZQ==',
@@ -198,7 +295,11 @@ export default class Platform implements DynamicPlatformPlugin {
         accessory
       ]);
     } catch (err: any) {
-      this.log.error('Failed to get info about:', ip, '|', err.message);
+      this.log.debug(
+        'Failed to get info about %s: %s',
+        ip,
+        err?.message ?? String(err)
+      );
       this.deviceRetry[uuid] -= 1;
       return await this.loadDevice(ip, email, password);
     }
@@ -213,17 +314,19 @@ export default class Platform implements DynamicPlatformPlugin {
     if (this.deviceRetry[uuid] === undefined) {
       this.deviceRetry[uuid] = this.TIMEOUT_TRIES;
     } else if (this.deviceRetry[uuid] <= 0) {
-      this.log.info('Retry timeout:', id);
+      this.log.debug(
+        'Child device %s not ready; background reconnect will retry.',
+        id
+      );
       return;
     } else {
-      this.log.info('Retry to connect in 10s', ':', id);
-      await delay(10 * 1000);
-      this.log.info(
-        'Try for',
+      this.log.debug(
+        'Retrying child %s in 10s (%d/%d)',
         id,
-        ':',
-        `${this.deviceRetry[uuid]}/${this.TIMEOUT_TRIES}`
+        this.deviceRetry[uuid],
+        this.TIMEOUT_TRIES
       );
+      await delay(10 * 1000);
     }
 
     try {
@@ -299,7 +402,11 @@ export default class Platform implements DynamicPlatformPlugin {
         accessory
       ]);
     } catch (err: any) {
-      this.log.error('Failed to get info about child:', id, '|', err.message);
+      this.log.debug(
+        'Failed to get info about child %s: %s',
+        id,
+        err?.message ?? String(err)
+      );
       this.deviceRetry[uuid] -= 1;
       return await this.loadChildDevice(id, deviceInfo, parent);
     }
@@ -353,7 +460,10 @@ export default class Platform implements DynamicPlatformPlugin {
     const acc = new AccessoryClass(this, accessory, this.log, deviceInfo);
 
     if (acc instanceof HubAccessory) {
-      this.hubs.push(acc);
+      const alreadyTracked = this.hubs.some((h) => h.UUID === acc.UUID);
+      if (!alreadyTracked) {
+        this.hubs.push(acc);
+      }
     }
 
     return acc;
