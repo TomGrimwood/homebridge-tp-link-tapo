@@ -1,5 +1,7 @@
 # Ignore compiled code
-dist
+# dist is committed on this release branch so it can be installed
+# directly via `npm install <git-url>` without a build step.
+# dist
 
 # ------------- Defaults ------------- #
 
@@ -86,7 +88,7 @@ web_modules/
 
 # Nuxt.js build / generate output
 .nuxt
-dist
+# dist  (intentionally commented on release branch — see top of file)
 
 # Gatsby files
 .cache/

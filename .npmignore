@@ -101,7 +101,7 @@ web_modules/
 
 # Nuxt.js build / generate output
 .nuxt
-dist
+# dist (intentionally not ignored on release branch)
 
 # Gatsby files
 .cache/
