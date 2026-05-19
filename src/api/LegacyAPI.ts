@@ -27,7 +27,9 @@ export default class LegacyAPI extends API {
       true
     );
 
-    this.log.debug('[Login] BE AWARE, SENSITIVE DATA!!', JSON.stringify(body));
+    // Intentionally NOT logging the login response body — it contains
+    // credentials and session tokens.
+    this.log.debug('[%s] login ok', this.ip);
     this.loginToken = body?.result?.token;
   }
 
@@ -67,7 +69,12 @@ export default class LegacyAPI extends API {
       }
     );
 
-    this.log.debug('[Send Normal Request]', JSON.stringify(response.data));
+    this.log.debug(
+      '[%s] %s -> error_code=%s',
+      this.ip,
+      method,
+      response.data?.error_code
+    );
     return response;
   }
 
@@ -118,24 +125,32 @@ export default class LegacyAPI extends API {
       if (body?.result?.response) {
         body = JSON.parse(this.tpLinkCipher!.decrypt(body.result.response));
       }
-  
-      this.log.debug('[Send Secure Request]', JSON.stringify(body));
-  
+
+      this.log.debug(
+        '[%s] %s -> error_code=%s',
+        this.ip,
+        method,
+        body?.error_code
+      );
+
       return {
         response,
         body
       };
     } catch (error: any) {
-      if(error.response?.status === 403 && !forceHandshake) {
-        this.log.warn("Forbidden. Redoing the request with a token regeneration.");
+      if (error.response?.status === 403 && !forceHandshake) {
+        this.log.debug(
+          '[%s] %s -> 403, regenerating token and retrying',
+          this.ip,
+          method
+        );
         return this.sendSecureRequest(method, params, useToken, true);
       }
-      throw new Error(`Request failed: ${error}`);
+      throw new Error(`Request failed: ${error?.message ?? error}`);
     }
   }
 
   public needsNewHandshake() {
-    this.log.debug('[Needs Handshake] Check for Handshake');
     if (!this.classSetup) {
       throw new Error('Execute the .setup() first!');
     }
@@ -165,11 +180,11 @@ export default class LegacyAPI extends API {
     });
 
     const key = response?.data?.result?.key;
-    this.log.debug('[Handshake]', JSON.stringify(response.data));
 
     if (!key) {
       throw new Error('Failed to handshake with device');
     }
+    this.log.debug('[%s] handshake ok', this.ip);
 
     const [cookie, timeout] =
       response?.headers?.['set-cookie']?.[0]?.split(';') ?? [];
@@ -182,7 +197,6 @@ export default class LegacyAPI extends API {
   }
 
   private decodeHandshakeKey(key: string) {
-    this.log.debug('[Decode Handshake] Decoding handshake key');
     if (!this.classSetup) {
       throw new Error('Execute the .setup() first!');
     }

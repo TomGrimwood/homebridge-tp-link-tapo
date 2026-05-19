@@ -6,6 +6,7 @@ import {
 } from 'homebridge';
 
 import { AccessoryThisType } from '..';
+import { errorSummary, isNetworkError } from '../../../utils/errors';
 
 const characteristic: {
   get: CharacteristicGetHandler;
@@ -22,8 +23,17 @@ const characteristic: {
       await this.setAlarmEnabled(
         this.Characteristic.SecuritySystemTargetState.AWAY_ARM === value
       );
-    } catch (err: any) {
-      this.log.error('Failed to set power:', this.mac, '|', err.message);
+    } catch (err: unknown) {
+      const summary = errorSummary(err);
+      if (isNetworkError(err)) {
+        this.log.debug(
+          '[%s] set alarm state skipped (offline): %s',
+          this.mac,
+          summary
+        );
+      } else {
+        this.log.warn('[%s] set alarm state failed: %s', this.mac, summary);
+      }
     }
   }
 };

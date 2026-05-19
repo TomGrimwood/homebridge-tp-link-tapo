@@ -6,6 +6,7 @@ import {
 } from 'homebridge';
 
 import { AccessoryThisType } from '..';
+import { errorSummary, isNetworkError } from '../../../utils/errors';
 
 import {
   toHomeKitValues,
@@ -38,8 +39,21 @@ const characteristic: {
         'colorTemp',
         toTPLinkValues(parseInt(value.toString()))
       );
-    } catch (err: any) {
-      this.log.error('Failed to set colorTemp:', this.mac, '|', err.message);
+    } catch (err: unknown) {
+      const summary = errorSummary(err);
+      if (isNetworkError(err)) {
+        this.log.debug(
+          '[%s] set color temperature skipped (offline): %s',
+          this.mac,
+          summary
+        );
+      } else {
+        this.log.warn(
+          '[%s] set color temperature failed: %s',
+          this.mac,
+          summary
+        );
+      }
     }
   }
 };

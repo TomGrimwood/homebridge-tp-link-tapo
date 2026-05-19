@@ -29,11 +29,14 @@ export default class Platform implements DynamicPlatformPlugin {
   // continue indefinitely (see RECONNECT_INTERVAL_MS).
   private readonly TIMEOUT_TRIES = 3;
 
-  // How often to retry offline devices in the background. Reconnect
-  // passes are single-attempt-per-device with no internal delays, so
-  // 30s is cheap (a few short TCP connect attempts per tick) and means
-  // a device coming back online appears in HomeKit within ~30s.
-  private readonly RECONNECT_INTERVAL_MS = 30 * 1000;
+  // How often to retry offline devices in the background. Tapo devices
+  // need ~10s from power-on to be responsive, so polling faster than
+  // that is wasted effort. 10s gives ~5s average latency between a
+  // device coming back online and HomeKit picking it up.
+  // Passes are single-attempt-per-device, parallel, and guarded by
+  // `reconnectInProgress`, so the interval is genuinely the bound on
+  // user-visible latency rather than a thrash knob.
+  private readonly RECONNECT_INTERVAL_MS = 10 * 1000;
 
   public readonly Service: typeof Service = this.api.hap.Service;
   public readonly Characteristic: typeof Characteristic =
@@ -206,8 +209,12 @@ export default class Platform implements DynamicPlatformPlugin {
       );
 
       this.checkOldDevices();
-    } catch (err: any) {
-      this.log.error('Failed to discover devices:', err.message);
+    } catch (err: unknown) {
+      this.log.error(
+        'Discovery failed: %s',
+        err instanceof Error ? err.message : String(err)
+      );
+      this.log.debug('Full discovery error:', err);
     }
   }
 
@@ -271,8 +278,9 @@ export default class Platform implements DynamicPlatformPlugin {
 
       if (existingAccessory) {
         this.log.info(
-          'Restoring existing accessory from cache:',
-          existingAccessory.displayName
+          'Restored "%s" (%s) from cache',
+          existingAccessory.displayName,
+          ip
         );
         existingAccessory.context = {
           name: deviceName,
@@ -298,7 +306,7 @@ export default class Platform implements DynamicPlatformPlugin {
         return;
       }
 
-      this.log.info('Adding new accessory:', deviceName);
+      this.log.info('Added new accessory "%s" (%s)', deviceName, ip);
       const accessory = new this.api.platformAccessory<Context>(
         deviceName,
         uuid

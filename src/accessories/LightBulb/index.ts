@@ -141,12 +141,11 @@ export default class LightBulbAccessory extends Accessory {
         this._saturation = undefined;
         await this.tpLink.sendCommand('hueAndSaturation', h, s);
       }
-    } catch (err: any) {
-      this.log.error(
-        'Failed to update hue and saturation:',
+    } catch (err: unknown) {
+      this.log.debug(
+        '[%s] update hue/saturation failed: %s',
         this.mac,
-        '|',
-        err.message
+        err instanceof Error ? err.message : String(err)
       );
     }
   }

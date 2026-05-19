@@ -79,13 +79,18 @@ export default class MotionSensorAccessory extends Accessory {
       try {
         const response = await this.getInfo();
         if (!response) {
-          this.log.warn('Failed to check for updates, delaying 500ms');
+          this.log.debug('[%s] motion poll: no response, backing off', this.mac);
           await delay(500);
+          return;
         }
 
         motionDetected.updateValue(response.detected);
-      } catch (error) {
-        this.log.error('Failed to check for updates', error);
+      } catch (error: unknown) {
+        this.log.debug(
+          '[%s] motion poll failed: %s',
+          this.mac,
+          error instanceof Error ? error.message : String(error)
+        );
         await delay(500);
       }
     };
@@ -104,8 +109,12 @@ export default class MotionSensorAccessory extends Accessory {
       detected: init.detected,
       active: init.status === 'online'
     });
+    // NB: original code passed `5` (milliseconds) here, which polled
+    // the hub 200x/second and was almost certainly meant to be 5000.
+    // 500ms gives motion-sensor-grade responsiveness without
+    // hammering the hub.
     this.interval = setInterval(() => {
       callback();
-    }, 5);
+    }, 500);
   }
 }
