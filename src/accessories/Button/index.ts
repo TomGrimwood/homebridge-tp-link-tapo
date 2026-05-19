@@ -77,7 +77,10 @@ export default class ButtonAccessory extends Accessory {
       try {
         const response = await this.hub.getChildLogs(this.deviceInfo.device_id);
         if (!response) {
-          this.log.warn('Failed to check for updates, delaying 500ms');
+          this.log.debug(
+            '[%s] button poll: no response, backing off',
+            this.mac
+          );
           await delay(500);
         }
 
@@ -99,8 +102,12 @@ export default class ButtonAccessory extends Accessory {
               break;
           }
         }
-      } catch (error) {
-        this.log.error('Failed to check for updates', error);
+      } catch (error: unknown) {
+        this.log.debug(
+          '[%s] button poll failed: %s',
+          this.mac,
+          error instanceof Error ? error.message : String(error)
+        );
         await delay(500);
       }
 

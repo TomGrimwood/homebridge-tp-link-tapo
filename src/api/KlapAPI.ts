@@ -26,15 +26,17 @@ export default class KlapAPI extends API {
   }
 
   public async login() {
-    this.log.debug('[KLAP] Legacy login that does nothing, ignore this');
+    // KLAP login is performed inline as part of the handshake; the
+    // legacy login() entry point is a no-op for KLAP devices.
   }
 
   public async setup() {
-    this.log.debug('[KLAP] Legacy setup that does nothing, ignore this');
+    // KLAP setup is performed inline as part of the handshake; the
+    // legacy setup() entry point is a no-op for KLAP devices.
   }
 
   public async sendRequest(): Promise<AxiosResponse<any, any>> {
-    throw new Error('[KLAP] Legacy Method should not be called');
+    throw new Error('sendRequest is not supported for KLAP devices');
   }
 
   public async sendSecureRequest(
@@ -54,7 +56,7 @@ export default class KlapAPI extends API {
       method,
       params: (Object.keys(params).length > 0 && params) || null
     });
-    this.log.debug('[KLAP] Sending request:', rawRequest);
+    this.log.debug('[%s] klap %s', this.ip, method);
 
     const requestData = this.session!.cipher!.encrypt(rawRequest);
 
@@ -70,21 +72,27 @@ export default class KlapAPI extends API {
       );
   
       if (response.status !== 200) {
-        throw new Error('[KLAP] Request failed');
+        throw new Error(
+          `klap request failed: HTTP ${response.status}`
+        );
       }
-  
+
       const data = JSON.parse(this.session!.cipher!.decrypt(response.data));
-  
+
       return {
         response,
         body: data
       };
-    } catch(error:any) {
-      if(error.response?.status === 403 && !forceHandshake) {
-        this.log.warn("[KLAP] Forbidden. Redoing the request with a token regeneration.");
+    } catch (error: any) {
+      if (error.response?.status === 403 && !forceHandshake) {
+        this.log.debug(
+          '[%s] klap %s -> 403, regenerating session and retrying',
+          this.ip,
+          method
+        );
         return this.sendSecureRequest(method, params, _, true);
       }
-      throw new Error(`[KLAP] Request failed: ${error}`);
+      throw new Error(`klap request failed: ${error?.message ?? error}`);
     }
   }
 
@@ -147,14 +155,7 @@ export default class KlapAPI extends API {
     const remoteSeed: Buffer = data.subarray(0, 16);
     const serverHash: Buffer = data.subarray(16);
 
-    this.log.debug(
-      '[KLAP] First handshake decoded successfully:\nRemote Seed:',
-      remoteSeed.toString('hex'),
-      '\nServer Hash:',
-      serverHash.toString('hex'),
-      '\nCookie:',
-      cookieValue
-    );
+    this.log.debug('[%s] klap handshake1 ok', this.ip);
 
     const localHash = this.hashAuth(this.rawEmail, this.rawPassword);
     const localAuthHash = this.sha256(
@@ -162,7 +163,6 @@ export default class KlapAPI extends API {
     );
 
     if (Buffer.compare(localAuthHash, serverHash) === 0) {
-      this.log.debug('[KLAP] Local auth hash matches server hash');
       return {
         localSeed,
         remoteSeed,
@@ -175,7 +175,10 @@ export default class KlapAPI extends API {
     );
 
     if (Buffer.compare(emptyHash, serverHash) === 0) {
-      this.log.debug('[KLAP] [WARN] Empty auth hash matches server hash');
+      this.log.warn(
+        '[%s] klap accepted empty credentials — device may be factory-reset',
+        this.ip
+      );
       return {
         localSeed,
         remoteSeed,
@@ -192,7 +195,10 @@ export default class KlapAPI extends API {
     );
 
     if (Buffer.compare(testHash, serverHash) === 0) {
-      this.log.debug('[KLAP] [WARN] Test auth hash matches server hash');
+      this.log.warn(
+        '[%s] klap accepted built-in test credentials — device firmware may be unusual',
+        this.ip
+      );
       return {
         localSeed,
         remoteSeed,
@@ -201,7 +207,7 @@ export default class KlapAPI extends API {
     }
 
     this.session = undefined;
-    throw new Error('Failed to verify server hash');
+    throw new Error('klap handshake1 server hash mismatch (wrong credentials?)');
   }
 
   private async secondHandshake(
@@ -222,7 +228,7 @@ export default class KlapAPI extends API {
       );
 
       if (handshake2Result.status === 200) {
-        this.log.debug('[KLAP] Second handshake successful');
+        this.log.debug('[%s] klap handshake2 ok', this.ip);
         this.session = this.session!.completeHandshake(
           new KlapCipher(localSeed, remoteSeed, authHash)
         );
@@ -230,12 +236,16 @@ export default class KlapAPI extends API {
         return;
       }
 
-      this.log.warn('[KLAP] Second handshake failed', handshake2Result.data);
-    } catch (e: any) {
-      this.log.error(
-        '[KLAP] Second handshake failed:',
-        e.response.data || e.message
+      this.log.warn(
+        '[%s] klap handshake2 returned HTTP %s',
+        this.ip,
+        handshake2Result.status
       );
+    } catch (e: any) {
+      // e.response may be undefined for network errors; fall back to
+      // the error message in that case.
+      const detail = e?.response?.data ?? e?.message ?? String(e);
+      this.log.warn('[%s] klap handshake2 failed: %s', this.ip, detail);
     }
 
     this.session = undefined;

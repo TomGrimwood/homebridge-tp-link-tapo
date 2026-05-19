@@ -8,6 +8,7 @@ import LegacyAPI from './LegacyAPI';
 import commands from './commands';
 import KlapAPI from './KlapAPI';
 import API from './@types/API';
+import { errorSummary, isNetworkError } from '../utils/errors';
 
 export interface HandshakeData {
   cookie?: string;
@@ -82,22 +83,12 @@ export default class TPLink {
       }
 
       this.classSetup = true;
-    } catch (e: any) {
-      const code: string | undefined = e?.code ?? e?.cause?.code;
-      if (code && code !== 'ERR_BAD_REQUEST') {
-        this.log.debug(
-          'Error setting up TPLink class for %s (%s): %s',
-          this.ip,
-          code,
-          e?.message ?? String(e)
-        );
+    } catch (e: unknown) {
+      if (isNetworkError(e)) {
+        this.log.debug('[%s] setup skipped: %s', this.ip, errorSummary(e));
       } else {
-        this.log.error(
-          'Error setting up TPLink class for %s: %s',
-          this.ip,
-          e?.message ?? String(e)
-        );
-        this.log.debug('Full setup error for %s:', this.ip, e);
+        this.log.error('[%s] setup failed: %s', this.ip, errorSummary(e));
+        this.log.debug('[%s] full setup error:', this.ip, e);
       }
     }
 
@@ -217,7 +208,7 @@ export default class TPLink {
 
       if (this.api.needsNewHandshake() || this.tryResendCommand) {
         if (this.tryResendCommand) {
-          this.log.info('Trying to login again.');
+          this.log.debug('[%s] re-authenticating', this.ip);
         }
 
         await this.api.login();
@@ -269,51 +260,47 @@ export default class TPLink {
         if (!this.tryResendCommand) {
           if (`${body.error_code}` === '9999') {
             this.tryResendCommand = true;
-            this.log.info('Session expired');
+            this.log.debug('[%s] session expired, retrying %s', this.ip, command);
             return this.sendCommandWithNoLock(command, args, isDeviceOn);
           }
 
           if (`${body.error_code}` === '-1301') {
             this.tryResendCommand = true;
-            this.log.info('Rate limit exceeded. Renewing session.');
+            this.log.debug(
+              '[%s] rate-limited, renewing session and retrying %s',
+              this.ip,
+              command
+            );
             return this.sendCommandWithNoLock(command, args, isDeviceOn);
           }
         }
 
-        this.log.error('Command error:', command, '>', body.error_code);
+        this.log.warn(
+          '[%s] %s returned error_code %s',
+          this.ip,
+          command,
+          body.error_code
+        );
       }
 
       this.tryResendCommand = false;
       return (body?.result ?? body?.error_code === 0) as CommandReturnType<T>;
-    } catch (e: any) {
-      const networkErrorCodes = new Set([
-        'EHOSTUNREACH',
-        'ECONNREFUSED',
-        'ECONNRESET',
-        'ECONNABORTED',
-        'ETIMEDOUT',
-        'ENETUNREACH',
-        'ENOTFOUND'
-      ]);
-      const code: string | undefined = e?.code ?? e?.cause?.code;
-
-      if (code && networkErrorCodes.has(code)) {
-        // Device is unreachable (offline, powered off, etc). Avoid
-        // dumping the full axios error object on every failed poll.
+    } catch (e: unknown) {
+      if (isNetworkError(e)) {
         this.log.debug(
-          'Device unreachable while sending %s to %s (%s).',
-          command,
+          '[%s] %s skipped, device unreachable: %s',
           this.ip,
-          code
+          command,
+          errorSummary(e)
         );
       } else {
-        this.log.error(
-          'Error sending command %s to %s: %s',
-          command,
+        this.log.warn(
+          '[%s] %s failed: %s',
           this.ip,
-          e?.message ?? String(e)
+          command,
+          errorSummary(e)
         );
-        this.log.debug('Full error details for %s:', this.ip, e);
+        this.log.debug('[%s] full error for %s:', this.ip, command, e);
       }
 
       this.tryResendCommand = false;
@@ -323,20 +310,20 @@ export default class TPLink {
 
   private async checkProtocol(): Promise<Protocol> {
     try {
-      this.log.debug('Checking protocol');
       const response = await this.api.sendRequest('component_nego', {}, false);
       if (response.data.error_code === 1003) {
-        this.log.debug(`Using KLAP protocol for ${this.ip}`);
+        this.log.debug('[%s] protocol: KLAP', this.ip);
         return Protocol.KLAP;
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       this.log.debug(
-        'Protocol error response:',
-        JSON.stringify(e?.response?.data || e?.response || e)
+        '[%s] protocol probe failed (%s), defaulting to legacy',
+        this.ip,
+        errorSummary(e)
       );
     }
 
-    this.log.debug(`Using legacy protocol for ${this.ip}`);
+    this.log.debug('[%s] protocol: legacy', this.ip);
     return Protocol.Legacy;
   }
 }
