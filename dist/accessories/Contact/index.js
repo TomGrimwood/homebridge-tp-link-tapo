@@ -43,7 +43,7 @@ class ContactAccessory extends Accessory_1.default {
                 }
                 const response = await this.hub.getChildLogs(this.deviceInfo.device_id);
                 if (!response) {
-                    this.log.warn('Failed to check for updates, delaying 500ms');
+                    this.log.debug('[%s] contact poll: no response, backing off', this.mac);
                     await (0, delay_1.default)(500);
                 }
                 const lastEvent = (_a = response === null || response === void 0 ? void 0 : response.logs) === null || _a === void 0 ? void 0 : _a[0];
@@ -53,7 +53,7 @@ class ContactAccessory extends Accessory_1.default {
                 }
             }
             catch (error) {
-                this.log.error('Failed to check for updates', error);
+                this.log.debug('[%s] contact poll failed: %s', this.mac, error instanceof Error ? error.message : String(error));
                 await (0, delay_1.default)(500);
             }
             checkStatus();

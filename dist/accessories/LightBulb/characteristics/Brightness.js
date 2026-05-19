@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const errors_1 = require("../../../utils/errors");
 const characteristic = {
     get: async function () {
         const deviceInfo = await this.tpLink.getInfo();
@@ -10,7 +11,13 @@ const characteristic = {
             await this.tpLink.sendCommand('brightness', parseInt(value.toString()));
         }
         catch (err) {
-            this.log.error('Failed to set brightness:', this.mac, '|', err.message);
+            const summary = (0, errors_1.errorSummary)(err);
+            if ((0, errors_1.isNetworkError)(err)) {
+                this.log.debug('[%s] set brightness skipped (offline): %s', this.mac, summary);
+            }
+            else {
+                this.log.warn('[%s] set brightness failed: %s', this.mac, summary);
+            }
         }
     }
 };

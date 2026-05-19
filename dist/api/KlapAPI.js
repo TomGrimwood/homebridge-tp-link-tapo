@@ -19,29 +19,31 @@ class KlapAPI extends API_1.default {
         this.lock = new async_lock_1.default();
     }
     async login() {
-        this.log.debug('[KLAP] Legacy login that does nothing, ignore this');
+        // KLAP login is performed inline as part of the handshake; the
+        // legacy login() entry point is a no-op for KLAP devices.
     }
     async setup() {
-        this.log.debug('[KLAP] Legacy setup that does nothing, ignore this');
+        // KLAP setup is performed inline as part of the handshake; the
+        // legacy setup() entry point is a no-op for KLAP devices.
     }
     async sendRequest() {
-        throw new Error('[KLAP] Legacy Method should not be called');
+        throw new Error('sendRequest is not supported for KLAP devices');
     }
     async sendSecureRequest(method, params, _, forceHandshake = false) {
-        var _a;
+        var _a, _b;
         await this.handshake(forceHandshake);
         const rawRequest = JSON.stringify({
             method,
             params: (Object.keys(params).length > 0 && params) || null
         });
-        this.log.debug('[KLAP] Sending request:', rawRequest);
+        this.log.debug('[%s] klap %s', this.ip, method);
         const requestData = this.session.cipher.encrypt(rawRequest);
         try {
             const response = await this.sessionPost('/request', requestData.encrypted, 'arraybuffer', this.session.Cookie, {
                 seq: requestData.seq.toString()
             });
             if (response.status !== 200) {
-                throw new Error('[KLAP] Request failed');
+                throw new Error(`klap request failed: HTTP ${response.status}`);
             }
             const data = JSON.parse(this.session.cipher.decrypt(response.data));
             return {
@@ -51,10 +53,10 @@ class KlapAPI extends API_1.default {
         }
         catch (error) {
             if (((_a = error.response) === null || _a === void 0 ? void 0 : _a.status) === 403 && !forceHandshake) {
-                this.log.warn("[KLAP] Forbidden. Redoing the request with a token regeneration.");
+                this.log.debug('[%s] klap %s -> 403, regenerating session and retrying', this.ip, method);
                 return this.sendSecureRequest(method, params, _, true);
             }
-            throw new Error(`[KLAP] Request failed: ${error}`);
+            throw new Error(`klap request failed: ${(_b = error === null || error === void 0 ? void 0 : error.message) !== null && _b !== void 0 ? _b : error}`);
         }
     }
     needsNewHandshake() {
@@ -98,11 +100,10 @@ class KlapAPI extends API_1.default {
         this.session = new Session(timeoutValue, cookieValue);
         const remoteSeed = data.subarray(0, 16);
         const serverHash = data.subarray(16);
-        this.log.debug('[KLAP] First handshake decoded successfully:\nRemote Seed:', remoteSeed.toString('hex'), '\nServer Hash:', serverHash.toString('hex'), '\nCookie:', cookieValue);
+        this.log.debug('[%s] klap handshake1 ok', this.ip);
         const localHash = this.hashAuth(this.rawEmail, this.rawPassword);
         const localAuthHash = this.sha256(Buffer.concat([localSeed, remoteSeed, localHash]));
         if (Buffer.compare(localAuthHash, serverHash) === 0) {
-            this.log.debug('[KLAP] Local auth hash matches server hash');
             return {
                 localSeed,
                 remoteSeed,
@@ -111,7 +112,7 @@ class KlapAPI extends API_1.default {
         }
         const emptyHash = this.sha256(Buffer.concat([localSeed, remoteSeed, this.hashAuth('', '')]));
         if (Buffer.compare(emptyHash, serverHash) === 0) {
-            this.log.debug('[KLAP] [WARN] Empty auth hash matches server hash');
+            this.log.warn('[%s] klap accepted empty credentials — device may be factory-reset', this.ip);
             return {
                 localSeed,
                 remoteSeed,
@@ -124,7 +125,7 @@ class KlapAPI extends API_1.default {
             this.hashAuth(KlapAPI.TP_TEST_USER, KlapAPI.TP_TEST_PASSWORD)
         ]));
         if (Buffer.compare(testHash, serverHash) === 0) {
-            this.log.debug('[KLAP] [WARN] Test auth hash matches server hash');
+            this.log.warn('[%s] klap accepted built-in test credentials — device firmware may be unusual', this.ip);
             return {
                 localSeed,
                 remoteSeed,
@@ -132,21 +133,25 @@ class KlapAPI extends API_1.default {
             };
         }
         this.session = undefined;
-        throw new Error('Failed to verify server hash');
+        throw new Error('klap handshake1 server hash mismatch (wrong credentials?)');
     }
     async secondHandshake(localSeed, remoteSeed, authHash) {
+        var _a, _b, _c;
         const localAuthHash = this.sha256(Buffer.concat([remoteSeed, localSeed, authHash]));
         try {
             const handshake2Result = await this.sessionPost('/handshake2', localAuthHash, 'text', this.session.Cookie);
             if (handshake2Result.status === 200) {
-                this.log.debug('[KLAP] Second handshake successful');
+                this.log.debug('[%s] klap handshake2 ok', this.ip);
                 this.session = this.session.completeHandshake(new KlapCipher_1.default(localSeed, remoteSeed, authHash));
                 return;
             }
-            this.log.warn('[KLAP] Second handshake failed', handshake2Result.data);
+            this.log.warn('[%s] klap handshake2 returned HTTP %s', this.ip, handshake2Result.status);
         }
         catch (e) {
-            this.log.error('[KLAP] Second handshake failed:', e.response.data || e.message);
+            // e.response may be undefined for network errors; fall back to
+            // the error message in that case.
+            const detail = (_c = (_b = (_a = e === null || e === void 0 ? void 0 : e.response) === null || _a === void 0 ? void 0 : _a.data) !== null && _b !== void 0 ? _b : e === null || e === void 0 ? void 0 : e.message) !== null && _c !== void 0 ? _c : String(e);
+            this.log.warn('[%s] klap handshake2 failed: %s', this.ip, detail);
         }
         this.session = undefined;
     }

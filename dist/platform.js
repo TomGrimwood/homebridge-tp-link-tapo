@@ -45,11 +45,14 @@ class Platform {
         // quickly even when some devices are offline; background reconnects
         // continue indefinitely (see RECONNECT_INTERVAL_MS).
         this.TIMEOUT_TRIES = 3;
-        // How often to retry offline devices in the background. Reconnect
-        // passes are single-attempt-per-device with no internal delays, so
-        // 30s is cheap (a few short TCP connect attempts per tick) and means
-        // a device coming back online appears in HomeKit within ~30s.
-        this.RECONNECT_INTERVAL_MS = 30 * 1000;
+        // How often to retry offline devices in the background. Tapo devices
+        // need ~10s from power-on to be responsive, so polling faster than
+        // that is wasted effort. 10s gives ~5s average latency between a
+        // device coming back online and HomeKit picking it up.
+        // Passes are single-attempt-per-device, parallel, and guarded by
+        // `reconnectInProgress`, so the interval is genuinely the bound on
+        // user-visible latency rather than a thrash knob.
+        this.RECONNECT_INTERVAL_MS = 10 * 1000;
         this.Service = this.api.hap.Service;
         this.Characteristic = this.api.hap.Characteristic;
         this.accessories = [];
@@ -183,7 +186,8 @@ class Platform {
             this.checkOldDevices();
         }
         catch (err) {
-            this.log.error('Failed to discover devices:', err.message);
+            this.log.error('Discovery failed: %s', err instanceof Error ? err.message : String(err));
+            this.log.debug('Full discovery error:', err);
         }
     }
     async loadDevice(ip, email, password, singleAttempt = false) {
@@ -224,7 +228,7 @@ class Platform {
             const deviceName = Buffer.from((deviceInfo === null || deviceInfo === void 0 ? void 0 : deviceInfo.nickname) || 'Tm8gTmFtZQ==', 'base64').toString('utf-8');
             const existingAccessory = this.accessories.find((accessory) => accessory.UUID === uuid);
             if (existingAccessory) {
-                this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
+                this.log.info('Restored "%s" (%s) from cache', existingAccessory.displayName, ip);
                 existingAccessory.context = {
                     name: deviceName,
                     tpLink,
@@ -238,7 +242,7 @@ class Platform {
                 this.registeredDevices.push(registeredAccessory);
                 return;
             }
-            this.log.info('Adding new accessory:', deviceName);
+            this.log.info('Added new accessory "%s" (%s)', deviceName, ip);
             const accessory = new this.api.platformAccessory(deviceName, uuid);
             accessory.context = {
                 name: deviceName,

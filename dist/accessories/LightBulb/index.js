@@ -95,7 +95,7 @@ class LightBulbAccessory extends Accessory_1.default {
             }
         }
         catch (err) {
-            this.log.error('Failed to update hue and saturation:', this.mac, '|', err.message);
+            this.log.debug('[%s] update hue/saturation failed: %s', this.mac, err instanceof Error ? err.message : String(err));
         }
     }
 }

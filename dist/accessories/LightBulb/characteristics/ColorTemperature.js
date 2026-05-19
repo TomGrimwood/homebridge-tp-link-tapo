@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const errors_1 = require("../../../utils/errors");
 const translateColorTemp_1 = require("../../../utils/translateColorTemp");
 const characteristic = {
     get: async function () {
@@ -18,7 +19,13 @@ const characteristic = {
             await this.tpLink.sendCommand('colorTemp', (0, translateColorTemp_1.toTPLinkValues)(parseInt(value.toString())));
         }
         catch (err) {
-            this.log.error('Failed to set colorTemp:', this.mac, '|', err.message);
+            const summary = (0, errors_1.errorSummary)(err);
+            if ((0, errors_1.isNetworkError)(err)) {
+                this.log.debug('[%s] set color temperature skipped (offline): %s', this.mac, summary);
+            }
+            else {
+                this.log.warn('[%s] set color temperature failed: %s', this.mac, summary);
+            }
         }
     }
 };

@@ -22,7 +22,9 @@ class LegacyAPI extends API_1.default {
             username: this.email,
             password: this.password
         }, false, true);
-        this.log.debug('[Login] BE AWARE, SENSITIVE DATA!!', JSON.stringify(body));
+        // Intentionally NOT logging the login response body — it contains
+        // credentials and session tokens.
+        this.log.debug('[%s] login ok', this.ip);
         this.loginToken = (_a = body === null || body === void 0 ? void 0 : body.result) === null || _a === void 0 ? void 0 : _a.token;
     }
     async setup() {
@@ -32,6 +34,7 @@ class LegacyAPI extends API_1.default {
         this.classSetup = true;
     }
     async sendRequest(method, params, setCookie = false) {
+        var _a;
         const response = await axios_1.default.post(`http://${this.ip}/app`, JSON.stringify({
             method,
             params,
@@ -49,11 +52,11 @@ class LegacyAPI extends API_1.default {
                 keepAlive: false
             })
         });
-        this.log.debug('[Send Normal Request]', JSON.stringify(response.data));
+        this.log.debug('[%s] %s -> error_code=%s', this.ip, method, (_a = response.data) === null || _a === void 0 ? void 0 : _a.error_code);
         return response;
     }
     async sendSecureRequest(method, params, useToken = false, forceHandshake = false) {
-        var _a, _b;
+        var _a, _b, _c;
         if (forceHandshake) {
             await this.handshake();
         }
@@ -86,7 +89,7 @@ class LegacyAPI extends API_1.default {
             if ((_a = body === null || body === void 0 ? void 0 : body.result) === null || _a === void 0 ? void 0 : _a.response) {
                 body = JSON.parse(this.tpLinkCipher.decrypt(body.result.response));
             }
-            this.log.debug('[Send Secure Request]', JSON.stringify(body));
+            this.log.debug('[%s] %s -> error_code=%s', this.ip, method, body === null || body === void 0 ? void 0 : body.error_code);
             return {
                 response,
                 body
@@ -94,14 +97,13 @@ class LegacyAPI extends API_1.default {
         }
         catch (error) {
             if (((_b = error.response) === null || _b === void 0 ? void 0 : _b.status) === 403 && !forceHandshake) {
-                this.log.warn("Forbidden. Redoing the request with a token regeneration.");
+                this.log.debug('[%s] %s -> 403, regenerating token and retrying', this.ip, method);
                 return this.sendSecureRequest(method, params, useToken, true);
             }
-            throw new Error(`Request failed: ${error}`);
+            throw new Error(`Request failed: ${(_c = error === null || error === void 0 ? void 0 : error.message) !== null && _c !== void 0 ? _c : error}`);
         }
     }
     needsNewHandshake() {
-        this.log.debug('[Needs Handshake] Check for Handshake');
         if (!this.classSetup) {
             throw new Error('Execute the .setup() first!');
         }
@@ -125,10 +127,10 @@ class LegacyAPI extends API_1.default {
             key: this.publicKey
         });
         const key = (_b = (_a = response === null || response === void 0 ? void 0 : response.data) === null || _a === void 0 ? void 0 : _a.result) === null || _b === void 0 ? void 0 : _b.key;
-        this.log.debug('[Handshake]', JSON.stringify(response.data));
         if (!key) {
             throw new Error('Failed to handshake with device');
         }
+        this.log.debug('[%s] handshake ok', this.ip);
         const [cookie, timeout] = (_f = (_e = (_d = (_c = response === null || response === void 0 ? void 0 : response.headers) === null || _c === void 0 ? void 0 : _c['set-cookie']) === null || _d === void 0 ? void 0 : _d[0]) === null || _e === void 0 ? void 0 : _e.split(';')) !== null && _f !== void 0 ? _f : [];
         const expire = parseInt((_g = (timeout !== null && timeout !== void 0 ? timeout : '').split('=')[1]) !== null && _g !== void 0 ? _g : '0');
         this.handshakeData.expire = Date.now() + expire * 1000;
@@ -136,7 +138,6 @@ class LegacyAPI extends API_1.default {
         this.tpLinkCipher = this.decodeHandshakeKey(key);
     }
     decodeHandshakeKey(key) {
-        this.log.debug('[Decode Handshake] Decoding handshake key');
         if (!this.classSetup) {
             throw new Error('Execute the .setup() first!');
         }
