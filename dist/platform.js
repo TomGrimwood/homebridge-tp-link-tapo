@@ -45,10 +45,11 @@ class Platform {
         // quickly even when some devices are offline; background reconnects
         // continue indefinitely (see RECONNECT_INTERVAL_MS).
         this.TIMEOUT_TRIES = 3;
-        // How often to retry offline devices in the background. Long enough
-        // to be gentle on a powered-off router, short enough that a device
-        // coming back online appears in HomeKit within a couple minutes.
-        this.RECONNECT_INTERVAL_MS = 60 * 1000;
+        // How often to retry offline devices in the background. Reconnect
+        // passes are single-attempt-per-device with no internal delays, so
+        // 30s is cheap (a few short TCP connect attempts per tick) and means
+        // a device coming back online appears in HomeKit within ~30s.
+        this.RECONNECT_INTERVAL_MS = 30 * 1000;
         this.Service = this.api.hap.Service;
         this.Characteristic = this.api.hap.Characteristic;
         this.accessories = [];
@@ -59,6 +60,8 @@ class Platform {
         // Tracks IPs that finished their startup retries without succeeding.
         // The background reconnect loop will keep trying these forever.
         this.offlineAddresses = new Set();
+        // Guard so a slow reconnect pass cannot overlap with the next tick.
+        this.reconnectInProgress = false;
         this.accessoryClasses = {
             [Accessory_1.AccessoryType.LightBulb]: LightBulb_1.default,
             [Accessory_1.AccessoryType.Outlet]: Outlet_1.default,
@@ -93,47 +96,59 @@ class Platform {
         (_b = (_a = this.reconnectTimer).unref) === null || _b === void 0 ? void 0 : _b.call(_a);
     }
     async reconnectOfflineDevices() {
-        var _a, _b, _c;
+        var _a, _b;
+        if (this.reconnectInProgress) {
+            // Previous pass still running (unusual — a single pass should
+            // finish in a few seconds). Skip this tick to avoid overlap.
+            return;
+        }
         const { email, password } = (_a = this.config) !== null && _a !== void 0 ? _a : {};
         if (!email || !password || this.offlineAddresses.size === 0) {
             return;
         }
-        const addresses = [...this.offlineAddresses];
-        this.log.debug('Background reconnect: trying %d offline device(s)', addresses.length);
-        for (const ip of addresses) {
-            // Reset the per-device retry counter so loadDevice gets a fresh
-            // budget of TIMEOUT_TRIES attempts for this reconnect pass.
-            const uuid = this.api.hap.uuid.generate(ip);
-            delete this.deviceRetry[uuid];
-            try {
-                await this.loadDevice(ip, email, password);
-            }
-            catch (err) {
-                this.log.debug('Background reconnect attempt failed for %s: %s', ip, (_b = err === null || err === void 0 ? void 0 : err.message) !== null && _b !== void 0 ? _b : String(err));
+        this.reconnectInProgress = true;
+        try {
+            const addresses = [...this.offlineAddresses];
+            this.log.debug('Background reconnect: trying %d offline device(s)', addresses.length);
+            // Single attempt per device per tick, in parallel. Each attempt
+            // is just a TCP connect + key exchange — failures return in
+            // ~1-3s (EHOSTUNREACH after ARP), so the whole pass is fast
+            // even with many offline devices.
+            await Promise.all(addresses.map(async (ip) => {
+                var _a;
+                try {
+                    await this.loadDevice(ip, email, password, true);
+                }
+                catch (err) {
+                    this.log.debug('Background reconnect attempt failed for %s: %s', ip, (_a = err === null || err === void 0 ? void 0 : err.message) !== null && _a !== void 0 ? _a : String(err));
+                }
+            }));
+            // Re-scan hubs in case a hub came back online and brought
+            // children with it.
+            if (this.hubs.length > 0) {
+                try {
+                    await Promise.all(this.hubs.map(async (hub) => {
+                        const devices = await hub.getChildDevices();
+                        await Promise.all(devices.map((device) => {
+                            if (Object.keys(device || {}).length === 0) {
+                                return Promise.resolve();
+                            }
+                            const childUuid = this.api.hap.uuid.generate(device.device_id);
+                            if (this.loadedChildUUIDs[childUuid]) {
+                                return Promise.resolve();
+                            }
+                            this.loadedChildUUIDs[childUuid] = true;
+                            return this.loadChildDevice(device.device_id, device, hub);
+                        }));
+                    }));
+                }
+                catch (err) {
+                    this.log.debug('Background reconnect hub child sweep failed: %s', (_b = err === null || err === void 0 ? void 0 : err.message) !== null && _b !== void 0 ? _b : String(err));
+                }
             }
         }
-        // Re-scan hubs in case a hub came back online and brought children
-        // with it.
-        if (this.hubs.length > 0) {
-            try {
-                await Promise.all(this.hubs.map(async (hub) => {
-                    const devices = await hub.getChildDevices();
-                    await Promise.all(devices.map((device) => {
-                        if (Object.keys(device || {}).length === 0) {
-                            return Promise.resolve();
-                        }
-                        const childUuid = this.api.hap.uuid.generate(device.device_id);
-                        if (this.loadedChildUUIDs[childUuid]) {
-                            return Promise.resolve();
-                        }
-                        this.loadedChildUUIDs[childUuid] = true;
-                        return this.loadChildDevice(device.device_id, device, hub);
-                    }));
-                }));
-            }
-            catch (err) {
-                this.log.debug('Background reconnect hub child sweep failed: %s', (_c = err === null || err === void 0 ? void 0 : err.message) !== null && _c !== void 0 ? _c : String(err));
-            }
+        finally {
+            this.reconnectInProgress = false;
         }
     }
     configureAccessory(accessory) {
@@ -171,28 +186,36 @@ class Platform {
             this.log.error('Failed to discover devices:', err.message);
         }
     }
-    async loadDevice(ip, email, password) {
+    async loadDevice(ip, email, password, singleAttempt = false) {
         var _a;
         const uuid = this.api.hap.uuid.generate(ip);
-        if (this.deviceRetry[uuid] === undefined) {
-            this.deviceRetry[uuid] = this.TIMEOUT_TRIES;
-        }
-        else if (this.deviceRetry[uuid] <= 0) {
-            // Out of startup-retry budget. Defer to the background reconnect
-            // loop, which will keep retrying every RECONNECT_INTERVAL_MS.
-            this.offlineAddresses.add(ip);
-            this.log.info('%s is offline; will keep trying in the background every %ds.', ip, Math.round(this.RECONNECT_INTERVAL_MS / 1000));
-            return;
-        }
-        else {
-            this.log.debug('Retrying %s in 10s (%d/%d)', ip, this.deviceRetry[uuid], this.TIMEOUT_TRIES);
-            await (0, delay_1.default)(10 * 1000);
+        if (!singleAttempt) {
+            // Startup path: retry up to TIMEOUT_TRIES with 10s delays between
+            // attempts before deferring to the background reconnect loop.
+            if (this.deviceRetry[uuid] === undefined) {
+                this.deviceRetry[uuid] = this.TIMEOUT_TRIES;
+            }
+            else if (this.deviceRetry[uuid] <= 0) {
+                this.offlineAddresses.add(ip);
+                this.log.info('%s is offline; will keep trying in the background every %ds.', ip, Math.round(this.RECONNECT_INTERVAL_MS / 1000));
+                return;
+            }
+            else {
+                this.log.debug('Retrying %s in 10s (%d/%d)', ip, this.deviceRetry[uuid], this.TIMEOUT_TRIES);
+                await (0, delay_1.default)(10 * 1000);
+            }
         }
         try {
             const tpLink = await new TPLink_1.default(ip, email, password, this.log).setup();
             const deviceInfo = await tpLink.getInfo();
             if (Object.keys(deviceInfo || {}).length === 0) {
-                this.log.debug('No info from %s yet (will retry).', ip);
+                this.log.debug('No info from %s yet.', ip);
+                if (singleAttempt) {
+                    // Stay in offlineAddresses; next reconnect tick will try
+                    // again.
+                    this.offlineAddresses.add(ip);
+                    return;
+                }
                 this.deviceRetry[uuid] -= 1;
                 return await this.loadDevice(ip, email, password);
             }
@@ -234,6 +257,12 @@ class Platform {
         }
         catch (err) {
             this.log.debug('Failed to get info about %s: %s', ip, (_a = err === null || err === void 0 ? void 0 : err.message) !== null && _a !== void 0 ? _a : String(err));
+            if (singleAttempt) {
+                // Stay in offlineAddresses; the next reconnect tick will try
+                // again.
+                this.offlineAddresses.add(ip);
+                return;
+            }
             this.deviceRetry[uuid] -= 1;
             return await this.loadDevice(ip, email, password);
         }

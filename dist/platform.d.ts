@@ -17,6 +17,7 @@ export default class Platform implements DynamicPlatformPlugin {
     private readonly deviceRetry;
     private readonly offlineAddresses;
     private reconnectTimer?;
+    private reconnectInProgress;
     constructor(log: Logger, config: PlatformConfig, api: API);
     private startReconnectLoop;
     private reconnectOfflineDevices;
