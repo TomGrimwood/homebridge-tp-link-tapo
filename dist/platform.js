@@ -59,6 +59,7 @@ class Platform {
         this.loadedChildUUIDs = {};
         this.registeredDevices = [];
         this.hubs = [];
+        this.connectedDevices = new Set();
         this.deviceRetry = {};
         // Tracks IPs that finished their startup retries without succeeding.
         // The background reconnect loop will keep trying these forever.
@@ -84,6 +85,9 @@ class Platform {
             if (this.reconnectTimer) {
                 clearInterval(this.reconnectTimer);
                 this.reconnectTimer = undefined;
+            }
+            for (const tpLink of this.connectedDevices) {
+                tpLink.stopHomeKitStateSync();
             }
         });
     }
@@ -354,6 +358,9 @@ class Platform {
             return null;
         }
         const acc = new AccessoryClass(this, accessory, this.log, deviceInfo);
+        const { tpLink } = accessory.context;
+        this.trackConnectedDevice(tpLink);
+        tpLink.enableHomeKitStateSync(deviceInfo);
         if (acc instanceof Hub_1.default) {
             const alreadyTracked = this.hubs.some((h) => h.UUID === acc.UUID);
             if (!alreadyTracked) {
@@ -368,6 +375,9 @@ class Platform {
             return null;
         }
         return new ChildClass(parent, this, accessory, this.log, deviceInfo);
+    }
+    trackConnectedDevice(tpLink) {
+        this.connectedDevices.add(tpLink);
     }
 }
 exports.default = Platform;

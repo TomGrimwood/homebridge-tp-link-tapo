@@ -14,6 +14,7 @@ export default class Platform implements DynamicPlatformPlugin {
     readonly loadedChildUUIDs: Record<string, true>;
     readonly registeredDevices: Accessory[];
     readonly hubs: HubAccessory[];
+    private readonly connectedDevices;
     private readonly deviceRetry;
     private readonly offlineAddresses;
     private reconnectTimer?;
@@ -30,5 +31,6 @@ export default class Platform implements DynamicPlatformPlugin {
     private registerAccessory;
     private readonly childClasses;
     private registerChild;
+    private trackConnectedDevice;
 }
 //# sourceMappingURL=platform.d.ts.map

@@ -8,6 +8,7 @@ import LegacyAPI from './LegacyAPI';
 import commands from './commands';
 import KlapAPI from './KlapAPI';
 import API from './@types/API';
+import DeviceInfoStore, { patchFromCommand } from './DeviceInfoStore';
 import { errorSummary, isNetworkError } from '../utils/errors';
 
 export interface HandshakeData {
@@ -27,6 +28,7 @@ export default class TPLink {
   private _protocol: Protocol = Protocol.Legacy;
 
   private readonly lock: AsyncLock;
+  private readonly state = new DeviceInfoStore();
 
   private api: API;
 
@@ -44,11 +46,6 @@ export default class TPLink {
       setAt: number;
     }
   > = {};
-
-  private infoCache?: {
-    data: DeviceInfo;
-    setAt: number;
-  };
 
   private childInfoCache: Record<
     string,
@@ -122,21 +119,31 @@ export default class TPLink {
     );
   }
 
+  public getStateSnapshot(): DeviceInfo {
+    return this.state.snapshot();
+  }
+
+  public enableHomeKitStateSync(initial: DeviceInfo): void {
+    this.state.seed(initial);
+    this.state.startSync(() => this.fetchDeviceInfo());
+  }
+
+  public stopHomeKitStateSync(): void {
+    this.state.stopSync();
+  }
+
   public async getInfo(): Promise<DeviceInfo> {
-    return this.lock.acquire('get-info-cache', async () => {
-      if (this.infoCache && Date.now() - this.infoCache.setAt < 100) {
-        return this.infoCache.data;
-      }
+    return this.state.refresh(() => this.fetchDeviceInfo());
+  }
 
-      const deviceInfo = (await this.sendCommand('deviceInfo')) ?? {};
-      this.infoCache = {
-        data: deviceInfo,
-        setAt: Date.now()
-      };
+  private async fetchDeviceInfo(): Promise<DeviceInfo | null> {
+    const deviceInfo = (await this.sendCommand('deviceInfo')) ?? {};
+    if (Object.keys(deviceInfo).length === 0) {
+      return null;
+    }
 
-      this._prevPowerState = deviceInfo.device_on ?? false;
-      return deviceInfo;
-    });
+    this._prevPowerState = deviceInfo.device_on ?? false;
+    return deviceInfo;
   }
 
   public async getChildInfo(childId: string): Promise<ChildInfo> {
@@ -233,6 +240,7 @@ export default class TPLink {
 
         if (command !== 'power') {
           this.tryResendCommand = false;
+          this.applyCommandToState(command, args);
           return true as CommandReturnType<T>;
         }
       }
@@ -284,7 +292,11 @@ export default class TPLink {
       }
 
       this.tryResendCommand = false;
-      return (body?.result ?? body?.error_code === 0) as CommandReturnType<T>;
+      const succeeded = (body?.result ?? body?.error_code === 0) as CommandReturnType<T>;
+      if (succeeded) {
+        this.applyCommandToState(command, args);
+      }
+      return succeeded;
     } catch (e: unknown) {
       if (isNetworkError(e)) {
         this.log.debug(
@@ -305,6 +317,16 @@ export default class TPLink {
 
       this.tryResendCommand = false;
       return null as CommandReturnType<T>;
+    }
+  }
+
+  private applyCommandToState<T extends Command>(
+    command: T,
+    args: Parameters<Commands[T]>
+  ): void {
+    const patch = patchFromCommand(command, args as unknown[]);
+    if (patch) {
+      this.state.patch(patch);
     }
   }
 

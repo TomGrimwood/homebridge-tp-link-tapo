@@ -1,11 +1,11 @@
 import {
   CharacteristicGetHandler,
   CharacteristicSetHandler,
-  CharacteristicValue,
-  Nullable
+  CharacteristicValue
 } from 'homebridge';
 
 import { AccessoryThisType } from '..';
+import { readState } from '../../readState';
 import { errorSummary, isNetworkError } from '../../../utils/errors';
 
 import {
@@ -19,9 +19,8 @@ const characteristic: {
   get: CharacteristicGetHandler;
   set: CharacteristicSetHandler;
 } & AccessoryThisType = {
-  get: async function (): Promise<Nullable<CharacteristicValue>> {
-    const deviceInfo = await this.tpLink.getInfo();
-    const value = toHomeKitValues(deviceInfo.color_temp || TP_LINK_VALUES.min);
+  get: readState((info) => {
+    const value = toHomeKitValues(info.color_temp || TP_LINK_VALUES.min);
 
     if (value < HOME_KIT_VALUES.min) {
       return HOME_KIT_VALUES.min;
@@ -32,7 +31,7 @@ const characteristic: {
     }
 
     return value;
-  },
+  }),
   set: async function (value: CharacteristicValue) {
     try {
       await this.tpLink.sendCommand(

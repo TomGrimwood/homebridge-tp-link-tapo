@@ -1,11 +1,11 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const readState_1 = require("../../readState");
 const errors_1 = require("../../../utils/errors");
 const translateColorTemp_1 = require("../../../utils/translateColorTemp");
 const characteristic = {
-    get: async function () {
-        const deviceInfo = await this.tpLink.getInfo();
-        const value = (0, translateColorTemp_1.toHomeKitValues)(deviceInfo.color_temp || translateColorTemp_1.TP_LINK_VALUES.min);
+    get: (0, readState_1.readState)((info) => {
+        const value = (0, translateColorTemp_1.toHomeKitValues)(info.color_temp || translateColorTemp_1.TP_LINK_VALUES.min);
         if (value < translateColorTemp_1.HOME_KIT_VALUES.min) {
             return translateColorTemp_1.HOME_KIT_VALUES.min;
         }
@@ -13,7 +13,7 @@ const characteristic = {
             return translateColorTemp_1.HOME_KIT_VALUES.max;
         }
         return value;
-    },
+    }),
     set: async function (value) {
         try {
             await this.tpLink.sendCommand('colorTemp', (0, translateColorTemp_1.toTPLinkValues)(parseInt(value.toString())));

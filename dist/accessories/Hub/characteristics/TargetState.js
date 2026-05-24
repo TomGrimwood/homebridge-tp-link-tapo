@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const errors_1 = require("../../../utils/errors");
 const characteristic = {
     get: async function () {
-        const deviceInfo = await this.tpLink.getInfo();
+        const deviceInfo = this.tpLink.getStateSnapshot();
         return deviceInfo.in_alarm
             ? this.Characteristic.SecuritySystemTargetState.AWAY_ARM
             : this.Characteristic.SecuritySystemTargetState.DISARM;

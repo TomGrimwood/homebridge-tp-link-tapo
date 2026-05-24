@@ -1,10 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const readState_1 = require("../../readState");
 const characteristic = {
-    get: async function () {
-        const deviceInfo = await this.tpLink.getInfo();
-        return deviceInfo.hue || 0;
-    },
+    get: (0, readState_1.readState)((info) => info.hue || 0),
     set: async function (value) {
         this.hue = parseInt(value.toString());
     }

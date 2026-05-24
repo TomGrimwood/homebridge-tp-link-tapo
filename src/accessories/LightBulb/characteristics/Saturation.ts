@@ -1,20 +1,17 @@
 import {
   CharacteristicGetHandler,
   CharacteristicSetHandler,
-  CharacteristicValue,
-  Nullable
+  CharacteristicValue
 } from 'homebridge';
 
 import { AccessoryThisType } from '..';
+import { readState } from '../../readState';
 
 const characteristic: {
   get: CharacteristicGetHandler;
   set: CharacteristicSetHandler;
 } & AccessoryThisType = {
-  get: async function (): Promise<Nullable<CharacteristicValue>> {
-    const deviceInfo = await this.tpLink.getInfo();
-    return deviceInfo.saturation || 0;
-  },
+  get: readState((info) => info.saturation || 0),
   set: async function (value: CharacteristicValue) {
     this.saturation = parseInt(value.toString());
   }

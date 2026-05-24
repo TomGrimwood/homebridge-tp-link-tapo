@@ -1,4 +1,27 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -8,6 +31,7 @@ const Protocol_1 = __importDefault(require("./@types/Protocol"));
 const LegacyAPI_1 = __importDefault(require("./LegacyAPI"));
 const commands_1 = __importDefault(require("./commands"));
 const KlapAPI_1 = __importDefault(require("./KlapAPI"));
+const DeviceInfoStore_1 = __importStar(require("./DeviceInfoStore"));
 const errors_1 = require("../utils/errors");
 class TPLink {
     get protocol() {
@@ -19,6 +43,7 @@ class TPLink {
         this.password = password;
         this.log = log;
         this._protocol = Protocol_1.default.Legacy;
+        this.state = new DeviceInfoStore_1.default();
         this.classSetup = false;
         this.tryResendCommand = false;
         this._prevPowerState = false;
@@ -68,20 +93,27 @@ class TPLink {
             return response;
         });
     }
+    getStateSnapshot() {
+        return this.state.snapshot();
+    }
+    enableHomeKitStateSync(initial) {
+        this.state.seed(initial);
+        this.state.startSync(() => this.fetchDeviceInfo());
+    }
+    stopHomeKitStateSync() {
+        this.state.stopSync();
+    }
     async getInfo() {
-        return this.lock.acquire('get-info-cache', async () => {
-            var _a, _b;
-            if (this.infoCache && Date.now() - this.infoCache.setAt < 100) {
-                return this.infoCache.data;
-            }
-            const deviceInfo = (_a = (await this.sendCommand('deviceInfo'))) !== null && _a !== void 0 ? _a : {};
-            this.infoCache = {
-                data: deviceInfo,
-                setAt: Date.now()
-            };
-            this._prevPowerState = (_b = deviceInfo.device_on) !== null && _b !== void 0 ? _b : false;
-            return deviceInfo;
-        });
+        return this.state.refresh(() => this.fetchDeviceInfo());
+    }
+    async fetchDeviceInfo() {
+        var _a, _b;
+        const deviceInfo = (_a = (await this.sendCommand('deviceInfo'))) !== null && _a !== void 0 ? _a : {};
+        if (Object.keys(deviceInfo).length === 0) {
+            return null;
+        }
+        this._prevPowerState = (_b = deviceInfo.device_on) !== null && _b !== void 0 ? _b : false;
+        return deviceInfo;
     }
     async getChildInfo(childId) {
         return this.lock.acquire('get-child-info-cache', async () => {
@@ -142,6 +174,7 @@ class TPLink {
                 };
                 if (command !== 'power') {
                     this.tryResendCommand = false;
+                    this.applyCommandToState(command, args);
                     return true;
                 }
             }
@@ -171,7 +204,11 @@ class TPLink {
                 this.log.warn('[%s] %s returned error_code %s', this.ip, command, body.error_code);
             }
             this.tryResendCommand = false;
-            return ((_a = body === null || body === void 0 ? void 0 : body.result) !== null && _a !== void 0 ? _a : (body === null || body === void 0 ? void 0 : body.error_code) === 0);
+            const succeeded = ((_a = body === null || body === void 0 ? void 0 : body.result) !== null && _a !== void 0 ? _a : (body === null || body === void 0 ? void 0 : body.error_code) === 0);
+            if (succeeded) {
+                this.applyCommandToState(command, args);
+            }
+            return succeeded;
         }
         catch (e) {
             if ((0, errors_1.isNetworkError)(e)) {
@@ -183,6 +220,12 @@ class TPLink {
             }
             this.tryResendCommand = false;
             return null;
+        }
+    }
+    applyCommandToState(command, args) {
+        const patch = (0, DeviceInfoStore_1.patchFromCommand)(command, args);
+        if (patch) {
+            this.state.patch(patch);
         }
     }
     async checkProtocol() {

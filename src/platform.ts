@@ -46,6 +46,7 @@ export default class Platform implements DynamicPlatformPlugin {
   public readonly loadedChildUUIDs: Record<string, true> = {};
   public readonly registeredDevices: Accessory[] = [];
   public readonly hubs: HubAccessory[] = [];
+  private readonly connectedDevices = new Set<TPLink>();
   private readonly deviceRetry: {
     [key: string]: number;
   } = {};
@@ -72,6 +73,9 @@ export default class Platform implements DynamicPlatformPlugin {
       if (this.reconnectTimer) {
         clearInterval(this.reconnectTimer);
         this.reconnectTimer = undefined;
+      }
+      for (const tpLink of this.connectedDevices) {
+        tpLink.stopHomeKitStateSync();
       }
     });
   }
@@ -503,6 +507,9 @@ export default class Platform implements DynamicPlatformPlugin {
     }
 
     const acc = new AccessoryClass(this, accessory, this.log, deviceInfo);
+    const { tpLink } = (accessory as PlatformAccessory<Context>).context;
+    this.trackConnectedDevice(tpLink);
+    tpLink.enableHomeKitStateSync(deviceInfo);
 
     if (acc instanceof HubAccessory) {
       const alreadyTracked = this.hubs.some((h) => h.UUID === acc.UUID);
@@ -531,5 +538,9 @@ export default class Platform implements DynamicPlatformPlugin {
     }
 
     return new ChildClass(parent, this, accessory, this.log, deviceInfo);
+  }
+
+  private trackConnectedDevice(tpLink: TPLink): void {
+    this.connectedDevices.add(tpLink);
   }
 }

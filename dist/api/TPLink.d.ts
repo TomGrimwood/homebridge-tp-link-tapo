@@ -18,22 +18,27 @@ export default class TPLink {
     get protocol(): Protocol;
     private _protocol;
     private readonly lock;
+    private readonly state;
     private api;
     private classSetup;
     private tryResendCommand;
     private _prevPowerState;
     private _unsentData;
     private commandCache;
-    private infoCache?;
     private childInfoCache;
     constructor(ip: string, email: string, password: string, log: Logger);
     setup(): Promise<TPLink>;
     cacheSendCommand<T extends Command>(deviceId: string, command: T, ...args: Parameters<Commands[T]>): Promise<ReturnType<Commands[T]>>;
+    getStateSnapshot(): DeviceInfo;
+    enableHomeKitStateSync(initial: DeviceInfo): void;
+    stopHomeKitStateSync(): void;
     getInfo(): Promise<DeviceInfo>;
+    private fetchDeviceInfo;
     getChildInfo(childId: string): Promise<ChildInfo>;
     sendCommand<T extends Command>(command: T, ...args: Parameters<Commands[T]>): Promise<CommandReturnType<T>>;
     sendHubCommand<T extends Command>(command: T, childId: string, ...args: Parameters<Commands[T]>): Promise<CommandReturnType<T>>;
     private sendCommandWithNoLock;
+    private applyCommandToState;
     private checkProtocol;
 }
 export {};
